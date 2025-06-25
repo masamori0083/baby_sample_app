@@ -1,7 +1,7 @@
 use std::f32::consts::PI;
 
 use bevy::{
-	core_pipeline::{bloom::Bloom, tonemapping::Tonemapping},// ブルーム(光の拡散)とトーンマッピング(HDRからディスプレイ表示に変換)
+	core_pipeline::bloom::Bloom,// ブルーム(光の拡散)とトーンマッピング(HDRからディスプレイ表示に変換)
 	input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseButtonInput},// 入力イベント
 	math::prelude::*,
 	prelude::*, // Bevyの基本的なプリリュード(基本的機能とか要素とか)
@@ -70,41 +70,42 @@ const BIG_3D: f32 = 1.0;
 // 図形の設定
 
 /// 直方体
-const CUBOID: Cuboid = Cuboid::new(Vec3::new(SMALL_3D, BIG_3D, SMALL_3D));
+use once_cell::sync::Lazy;
+static CUBOID: Lazy<Cuboid> = Lazy::new(|| Cuboid::new(SMALL_3D, BIG_3D, SMALL_3D));
 
 /// 球体
-const SPHERE: Sphere = Sphere{ radius: 1.5 * SMALL_3D };
+static SPHERE: Lazy<Sphere> = Lazy::new(|| Sphere{ radius: 1.5 * SMALL_3D });
 
 /// 3Dの三角形
-const TRIANGLE_3D: Triangle3d = Triangle3d {
+static TRIANGLE_3D: Lazy<Triangle3d> = Lazy::new(|| Triangle3d {
     vertices: [ // 頂点座標
         Vec3::new(BIG_3D, -BIG_3D * 0.5, 0.0),  // 頂点1
-        Vec3::new(0.0, BIG_3D, 0.0),            // 頂点2（頂上）
+        Vec3::new(0.0, BIG_3D, 0.0),       // 頂点2（頂上）
         Vec3::new(-BIG_3D, -BIG_3D * 0.5, 0.0), // 頂点3
     ],
-};
+});
 
 /// カプセル型(円柱の両端に半球がついた形)
-const CAPSULE: Capsule = Capsule {
+static CAPSULE_3D: Lazy<Capsule3d> = Lazy::new(|| Capsule3d {
     radius: SMALL_3D,
-    half_height: BIG_3D,
-};
+    half_length: BIG_3D,
+});
 
 /// 円柱
-const CYLINDER: Cylinder = Cylinder {
-		radius: SMALL_3D,
-		half_height: SMALL_3D,
-};
+static CYLINDER: Lazy<Cylinder> = Lazy::new(|| Cylinder {
+    radius: SMALL_3D,
+    half_height: SMALL_3D,
+});
 
 // 四面体（ピラミッド型）
-const TETRAHEDRON: Tetrahedron = Tetrahedron {
+static TETRAHEDRON: Lazy<Tetrahedron> = Lazy::new(|| Tetrahedron {
     vertices: [ // 頂点座標
         Vec3::new(-BIG_3D, -BIG_3D * 0.67, BIG_3D * 0.5),   // 頂点1
         Vec3::new(BIG_3D, -BIG_3D * 0.67, BIG_3D * 0.5),    // 頂点2
         Vec3::new(0.0, -BIG_3D * 0.67, -BIG_3D * 1.17),     // 頂点3（背面）
         Vec3::new(0.0, BIG_3D, 0.0),                        // 頂点4（頂上）
     ],
-};
+});
 
 // コンポーネントとリソース定義→リソースはアプリケーション全体で共有されるデータ
 /// ランダムにポイントを生成するときのモードを示すリソース
@@ -146,15 +147,9 @@ impl SampledShapes {
 			let n_shapes = shapes.len();
 
 			// 各図形を、中央を基準にして左右均等な間隔で並べる
+			// 中央からの位置を計算(x方向のみ)
 			let translations = 
-				(0..n_shapes).map(|i| {
-					// 中央からの位置を計算(x方向のみ)
-					let offset = Vec3::new(
-						(i as f32 - n_shapes as f32 / 2.0) * DISTANCE_BETWEEN_SHAPES.,
-					);
-					// (図形, 位置)のタプルを返す
-					(shapes[i].clone(), offset)
-				});
+				(0..n_shapes).map(|i| (i as f32 - n_shapes as f32 / 2.0) * DISTANCE_BETWEEN_SHAPES);
 			
 			// 図形とそれぞれの位置情報をセットで保存して返す
 			SampledShapes(shapes.into_iter().zip(translations).collect())
@@ -258,13 +253,13 @@ struct PointMesh(Handle<Mesh>);
 struct PointMaterial {
     interior: Handle<StandardMaterial>,
     boundary: Handle<StandardMaterial>,
-};
+}
 
 /// サンプリングされたポイントを示すマーカーコンポーネント
 /// マーカーコンポーネントは、特定の機能や役割を持つエンティティを示すために使用される
 /// これらがついているエンティティだけに特定の処理を適用することができる
 #[derive(Component)]
-struct SamplePoint
+struct SamplePoint;
 
 /// ポイントが生成される時のアニメーションを管理するコンポーネント
 /// マイフレームこの値を更新する
@@ -310,10 +305,10 @@ struct CameraRig {
 
 /// アプリのセットアップ処理を行う関数
 fn setup(
-	mut commands: Commands, /// コマンドを発行するためのCommandsリソース
-	mut meshes: ResMut<Assets<Mesh>>, /// メッメッシュ(3D)を管理するためのAssetsリソース
-	mut materials: ResMut<Assets<StandardMaterial>>, /// マテリアル(材料)を管理するためのAssetsリソース
-	shapes: Res<SampledShapes>, /// サンプリング対象の図形を保持するSampledShapesリソース
+	mut commands: Commands, 
+	mut meshes: ResMut<Assets<Mesh>>, // メッメッシュ(3D)を管理するためのAssetsリソース
+	mut materials: ResMut<Assets<StandardMaterial>>, // マテリアル(材料)を管理するためのAssetsリソース
+	shapes: Res<SampledShapes>, // サンプリング対象の図形を保持するSampledShapesリソース
 ) {
 	// シード値を指定して乱数生成器を初期化
 	let seeded_rng = ChaCha8Rng::seed_from_u64(4); // 乱数生成器のシード値を設定
@@ -334,7 +329,8 @@ fn setup(
 	// 図形表示用の半透明なマテリアルを作成
     let shape_material = materials.add(StandardMaterial {
         base_color: Color::srgba(0.2, 0.1, 0.6, 0.3), // 半透明の青紫色
-        reflectance: 0.0,                            // 反射なし
+        metallic: 0.0, // 金属感なし
+        perceptual_roughness: 1.0, // 反射率の逆数相当
         alpha_mode: AlphaMode::Blend,                // 透明モード
         cull_mode: None,                             // 裏面も描画する
         ..default()
@@ -370,7 +366,7 @@ fn setup(
 				color: SKY_COLOR, // 環境光の色
 				intensity: 2_000.0, // 光の強さ
 				shadows_enabled: false, // 影はなし
-				...default()
+				..default()
 			},
 			Transform::from_xyz(4.0, 8.0, 4.0)
 		));
@@ -395,13 +391,15 @@ fn setup(
 		commands.insert_resource(PointMaterial {
 			interior: materials.add(StandardMaterial {
 				base_color: Color::BLACK,
-				reference: 0.05, // 反射率
+				metallic: 0.0, // 金属感なし
+				perceptual_roughness: 1.0 - 0.05, // 反射率の逆数相当
 				emissive: 2.5 * INSIDE_POINT_COLOR, // 内部ポイントの発光色
 				..default()
 			}),
 			boundary: materials.add(StandardMaterial {
 				base_color: Color::BLACK,
-				reference: 0.05, // 反射率
+				metallic: 0.0, // 金属感なし
+				perceptual_roughness: 1.0 - 0.05, // 反射率の逆数相当
 				emissive: 1.5 * BOUNDARY_POINT_COLOR, // 境界ポイントの発光色
 				..default()
 			}),
@@ -410,17 +408,16 @@ fn setup(
 		// ユーザー向けの操作説明テキストを画面に表示
     commands.spawn((
         Text::new(
-            "操作方法:\n\
-            Mキー: 内部/表面サンプリング切り替え\n\
-            Aキー: 自動ポイント生成/消滅 切り替え\n\
-            Rキー: リセット（ポイント消去）\n\
-            Sキー: ポイントを1つ追加\n\
-            Dキー: ポイントを100個追加\n\
-            マウス左ドラッグ: カメラ回転\n\
-            マウスホイール: カメラズーム\n\
-            +/-キー: ズームイン/アウト\n\
-            ←/→キー: カメラ注視点変更\n\
-            Tabキー: 説明表示の切り替え",
+            "Controls:\n\
+            M: Toggle between sampling boundary and interior.\n\
+            A: Toggle automatic spawning & despawning of points.\n\
+            R: Restart (erase all samples).\n\
+            S: Add one random sample.\n\
+            D: Add 100 random samples.\n\
+            Rotate camera by holding left mouse and panning.\n\
+            Zoom camera by scrolling via mouse or +/-.\n\
+            Move camera by L/R arrow keys.\n\
+            Tab: Toggle this text",
         ),
         Node {
             position_type: PositionType::Absolute,
@@ -443,47 +440,162 @@ fn setup(
 
 // キーボード入力を処理するシステム
 fn handle_keypress(
-	mut commands: Commands, // コマンドを発行するためのCommandsリソース(エンティティの生成や削除など)
-  keyboard: Res<ButtonInput<KeyCode>>, // キーボード入力を取得するためのリソース
-  mut mode: ResMut<SamplingMode>, // サンプリングモード(内か外か)を管理するリソース
-  mut spawn_mode: ResMut<SpawningMode>, // ポイント生成モード(自動か手動か)を管理するリソース
-  samples: Query<Entity, With<SamplePoint>>, // サンプリングされたポイントを持つエンティティを取得するクエリ
-  shapes: Res<SampledShapes>, // サンプリング対象の図形を保持するリソース
-  mut spawn_queue: ResMut<SpawnQueue>, // ポイント生成キューを管理するリソース
-  mut counter: ResMut<PointCounter>, // 現在のポイント数を管理するリソース
-  mut text_menus: Query<&mut Visibility, With<Text>>, // テキストメニューの可視性を管理するクエリ
-  mut camera_rig: Single<&mut CameraRig>, // カメラの動きを管理するコンポーネントを取得するシングルクエリ
+    mut commands: Commands,                            // エンティティの生成・削除を行うためのコマンド
+    keyboard: Res<ButtonInput<KeyCode>>,               // キーボード入力状態
+    mut mode: ResMut<SamplingMode>,                    // サンプリングモード（内部 or 境界）
+    mut spawn_mode: ResMut<SpawningMode>,              // ポイント生成モード（自動 or 手動）
+    samples: Query<Entity, With<SamplePoint>>,         // 現在存在する全てのポイント
+    shapes: Res<SampledShapes>,                        // 配置されている図形のデータ
+    mut spawn_queue: ResMut<SpawnQueue>,               // ポイント生成予約のキュー
+    mut counter: ResMut<PointCounter>,                 // 現在のポイント数を管理
+    mut text_menus: Query<&mut Visibility, With<Text>>,// UIテキストの表示・非表示を管理
+    mut camera_rig: Query<&mut CameraRig>,            // カメラ操作用のコンポーネント
 ) {
-	// マウスの左ボタンが押されたかどうかを検出して状態を更新
-	for button_event in button_event.read() {
-		if button_event.button != MouseButton::Left {
-			continue; // 左ボタン以外は無視
-		}
-		*mouse_pressed = MousePressed(button_event.state.is_pressed()); // マウスの押下状態を更新
-	}
+		// Queryから一意のカメラリグを取得
+		let mut camera_rig = camera_rig.single_mut().unwrap();
 
-	// マウスホイールでズーム操作を行う
-	if accumlated_mouse_scroll.delta != Vec2::ZERO {
-		let mouse_scroll = accumlated_mouse_scroll.delta.y;
-		camera_rig.distance -= mouse_scroll / 15.0 * MAX_CAMERA_DISTANCE; // ズームレベルを調整
-		camera_rig.distance = camera_rig.distance.clamp(MIN_CAMERA_DISTANCE, MAX_CAMERA_DISTANCE); // ズームレベルを制限
-	}
+    // 「R」キー：すべてのポイントを削除してリセット
+    if keyboard.just_pressed(KeyCode::KeyR) {
+        counter.0 = 0; // ポイント数をゼロにリセット
+        for entity in &samples {
+            commands.entity(entity).despawn(); // 各ポイントを削除
+        }
+    }
 
-	// マウスの左ボタンが押されていない場合ボタンが押されていない場合は操作を無視
-	if !mouse_pressed.0 {
-		return; // マウスが押されていない場合は何もしない
-	}
+    // 「S」キー：ポイントを1個生成予約
+    if keyboard.just_pressed(KeyCode::KeyS) {
+        spawn_queue.0 += 1;
+    }
 
-	// マウスの動きにおうしてカメラの角度を変更(ドラッグ操作)
-	if accumulated_mouse_motion.delta != Vec2::ZERO {
-		let displacement = accumulated_mouse_motion.delta;
-		camera_rig.yaw += displacement.x / 90.0; // 水平方向の回転角度を更新
-		camera_rig.pitch += displacement.y / 90.0; // 垂直方向の回転角度を更新
+    // 「D」キー：ポイントを100個生成予約
+    if keyboard.just_pressed(KeyCode::KeyD) {
+        spawn_queue.0 += 100;
+    }
 
-		// カメラの垂直角度を制限
-		camera_rig.pitch = camera_rig.pitch.clamp(-PI / 2.01, PI / 2.01);
-	}
+    // 「M」キー：サンプリングモード（内部 or 境界）を切り替え
+    if keyboard.just_pressed(KeyCode::KeyM) {
+        *mode = match *mode {
+            SamplingMode::Interior => SamplingMode::Boundary,
+            SamplingMode::Boundary => SamplingMode::Interior,
+        };
+    }
+
+    // 「A」キー：ポイント生成モード（自動 or 手動）を切り替え
+    if keyboard.just_pressed(KeyCode::KeyA) {
+        *spawn_mode = match *spawn_mode {
+            SpawningMode::Manual => SpawningMode::Automatic,
+            SpawningMode::Automatic => SpawningMode::Manual,
+        };
+    }
+
+    // 「Tab」キー：画面上のヘルプメニューの表示・非表示を切り替え
+    if keyboard.just_pressed(KeyCode::Tab) {
+        for mut visibility in text_menus.iter_mut() {
+            *visibility = match *visibility {
+                Visibility::Hidden => Visibility::Visible,
+                _ => Visibility::Hidden,
+            };
+        }
+    }
+
+    // 「-」キー：カメラをズームアウト（距離を遠ざける）
+    if keyboard.just_pressed(KeyCode::NumpadSubtract) || keyboard.just_pressed(KeyCode::Minus) {
+        camera_rig.distance += MAX_CAMERA_DISTANCE / 15.0;
+        camera_rig.distance = camera_rig
+            .distance
+            .clamp(MIN_CAMERA_DISTANCE, MAX_CAMERA_DISTANCE); // 距離の範囲制限
+    }
+
+    // 「+」キー：カメラをズームイン（距離を近づける）
+    if keyboard.just_pressed(KeyCode::NumpadAdd) {
+        camera_rig.distance -= MAX_CAMERA_DISTANCE / 15.0;
+        camera_rig.distance = camera_rig
+            .distance
+            .clamp(MIN_CAMERA_DISTANCE, MAX_CAMERA_DISTANCE); // 距離の範囲制限
+    }
+
+    // 「←」および「→」キー：カメラの注視する対象を左右の図形に切り替える
+    let left = keyboard.just_pressed(KeyCode::ArrowLeft);
+    let right = keyboard.just_pressed(KeyCode::ArrowRight);
+
+    if left || right {
+        let mut closest = 0;
+        let mut closest_distance = f32::MAX;
+
+        // 現在のターゲットに最も近い図形を検索
+        for (i, (_, position)) in shapes.0.iter().enumerate() {
+            let distance = camera_rig.target.distance(*position);
+            if distance < closest_distance {
+                closest = i;
+                closest_distance = distance;
+            }
+        }
+
+        // 左キーなら1つ左の図形へ移動（可能な場合）
+        if closest > 0 && left {
+            camera_rig.target = shapes.0[closest - 1].1;
+        }
+
+        // 右キーなら1つ右の図形へ移動（可能な場合）
+        if closest < shapes.0.len() - 1 && right {
+            camera_rig.target = shapes.0[closest + 1].1;
+        }
+    }
 }
+
+
+// マウス操作を処理し、カメラのズームや回転を行うシステム
+fn handle_mouse(
+    accumulated_mouse_motion: Res<AccumulatedMouseMotion>,  // マウスの動きを蓄積したデータ
+    accumulated_mouse_scroll: Res<AccumulatedMouseScroll>,  // マウスのスクロールホイールの動きを蓄積したデータ
+    mut button_events: EventReader<MouseButtonInput>,       // マウスボタンの入力イベントを取得
+    mut camera_query: Query<&mut CameraRig>,                // カメラの位置や回転、ズームを管理するコンポーネント
+    mut mouse_pressed: ResMut<MousePressed>,                // マウスが押されているかどうかの状態
+) {
+		// Queryから一意のカメラリグを取得
+		let mut camera_rig = camera_query.single_mut().unwrap();
+
+    // マウス左ボタンの押下・解放イベントを処理し、状態を更新
+    for button_event in button_events.read() {
+        if button_event.button != MouseButton::Left {
+            continue;  // 左ボタン以外は無視
+        }
+        // 左ボタンの押下状態を更新（true: 押下中, false: 離された状態）
+        *mouse_pressed = MousePressed(button_event.state.is_pressed());
+    }
+
+    // マウスホイールのスクロールによるズーム操作
+    if accumulated_mouse_scroll.delta != Vec2::ZERO {
+        // ホイールの動きを使ってズーム距離を調整
+        let mouse_scroll = accumulated_mouse_scroll.delta.y;
+        camera_rig.distance -= mouse_scroll / 15.0 * MAX_CAMERA_DISTANCE;
+
+        // カメラの距離が指定範囲内に収まるよう調整
+        camera_rig.distance = camera_rig
+            .distance
+            .clamp(MIN_CAMERA_DISTANCE, MAX_CAMERA_DISTANCE);
+    }
+
+    // マウス左ボタンが押されていない場合、回転操作を行わない
+    if !mouse_pressed.0 {
+        return;
+    }
+
+    // マウスのドラッグ（動き）によるカメラ回転操作
+    if accumulated_mouse_motion.delta != Vec2::ZERO {
+        let displacement = accumulated_mouse_motion.delta;
+
+        // 水平方向の動きに応じてカメラを左右に回転（yaw）
+        camera_rig.yaw += displacement.x / 90.0;
+
+        // 垂直方向の動きに応じてカメラを上下に回転（pitch）
+        camera_rig.pitch += displacement.y / 90.0;
+
+        // 上下の回転が行き過ぎてしまわないように、ピッチ角を制限
+        camera_rig.pitch = camera_rig.pitch.clamp(-PI / 2.01, PI / 2.01);
+    }
+}
+
 
 // ポイントを新しく生成するシステム
 fn spawn_points(
@@ -574,21 +686,17 @@ fn despawn_points(
 	// 実際にポイントを削除(アニメーション付き)
 	// イテレータ（Iterator）の機能で、途中の要素をスキップして指定数だけ取得する処理。
 	// スキップ数だけ飛ばして、削除するポイント数だけ取得
-	let removed_count = samples
-		.iter()
-		.skip(skip) // スキップ数だけ飛ばす
-		.take(despawn_amount) // 削除するポイント数だけ取得
-		.map(|entity| {
-			commands
-				.entity(entity)
-				.insert(DespawningPoint { progress: 0.0 }); // 削除アニメーションを追加
-				.remove::<SpawningPoint>() // 生成アニメーションを削除
-				.remove::<SamplePoint>() // ポイントマーカーを削除
-		})
-		.count(); // 削除したポイントの数をカウント
+    let mut removed = 0;
+    for entity in samples.iter().skip(skip).take(despawn_amount) {
+        commands.entity(entity)
+            .insert(DespawningPoint { progress: 0.0 })
+            .remove::<SpawningPoint>()
+            .remove::<SamplePoint>();
+        removed += 1;
+    }
 
 	// 削除したポイント数をカウンターから引く
-	counter.0 -= removed_count;
+	counter.0 -= removed;
 }
 
 // ポイント生成アニメーションを処理するシステム
@@ -598,13 +706,16 @@ fn animate_spawning(
 		time: Res<Time>,                     // 時間リソース
 		mut samples: Query<(Entity, &mut Transform, &mut SpawningPoint)>, // 生成中ポイントの取得
 ) {
+
+	let dt = time.delta_secs(); // 前回のフレームからの経過時間を取得
+
 	// 各生成中ポイントに対してアニメーションを更新
 	for (entity, mut transform, mut spawning) in samples.iter_mut() {
-		point.progress += dt / ANIMATION_TIME; // アニメーションの進行度を更新
-		transform.scale = Vec3::splat(point.progress.min(1.0)); // スケールを徐々に拡大
+		spawning.progress += dt / ANIMATION_TIME; // アニメーションの進行度を更新
+		transform.scale = Vec3::splat(spawning.progress.min(1.0)); // スケールを徐々に拡大
 
-		// アニメーショ完了したら生成中マーカー削除
-		if point.progress >= 1.0 {
+		// アニメーション完了したら生成中マーカー削除
+		if spawning.progress >= 1.0 {
 			commands.entity(entity).remove::<SpawningPoint>(); // 生成中マーカーを削除
 		}
 	} 
@@ -621,17 +732,17 @@ fn animate_despawning(
 	let dt = time.delta_secs(); // フレーム間の時間差を取得
 
 	// 各消滅中ポイントに対してアニメーションを更新
-	for (entity, mut transform, mut point) in samples.iter_mut() {
-		point.progress += dt / ANIMATION_TIME; // アニメーションの進行度を更新
-		
+	for (entity, mut transform, mut despawning) in samples.iter_mut() {
+		despawning.progress += dt / ANIMATION_TIME; // アニメーションの進行度を更新
+
 		// 急なサイズ変化を避けるため、進捗を調整
-		point.progress = f32::max(point.progress, 1.0 - transform.scale.x); // スケールが0になるまで進行度を調整
+		despawning.progress = f32::max(despawning.progress, 1.0 - transform.scale.x); // スケールが0になるまで進行度を調整
 
 		// スケールを徐々に縮小
-		transform.scale = Vec3::splat((1.0 - point.progress).max(0.0));
+		transform.scale = Vec3::splat((1.0 - despawning.progress).max(0.0));
 
 		// アニメーションが完了したらエンティティを削除
-		if point.progress >= 1.0 {
+		if despawning.progress >= 1.0 {
 			commands.entity(entity).despawn(); // エンティティを削除
 		}
 	}

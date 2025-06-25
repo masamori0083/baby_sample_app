@@ -1047,6 +1047,7 @@ name = "bevy_sample_app"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "once_cell",
  "rand",
  "rand_chacha",
 ]
