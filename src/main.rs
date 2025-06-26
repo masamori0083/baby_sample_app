@@ -1,4 +1,5 @@
 use std::f32::consts::PI;
+use std::time::Duration;
 
 use bevy::{
     core_pipeline::bloom::Bloom, // ブルーム(光の拡散)とトーンマッピング(HDRからディスプレイ表示に変換)
@@ -6,25 +7,30 @@ use bevy::{
     math::prelude::*,
     prelude::*, // Bevyの基本的なプリリュード(基本的機能とか要素とか)
 };
+use bevy_kira_audio::{
+    Audio, AudioControl, AudioInstance, AudioPlugin, AudioSource as KiraAudioSource, AudioTween,
+}; // 音声再生用のプラグイン
 use rand::{Rng, SeedableRng, seq::SliceRandom};
 use rand_chacha::ChaCha8Rng;
 
 fn main() {
     App::new() // 新しいBevyアプリケーションを作成(初期化)
         .add_plugins(DefaultPlugins) // Bevyのデフォルトプラグインを追加
+        .add_plugins(AudioPlugin) // 音声再生のためのプラグインを追加
         .insert_resource(SampledShapes::new()) // SampledShapesリソース(Resource)を追加
-        .add_systems(Startup, setup) // 起動時にsetupシステムを実行(System)
+        .add_systems(Startup, (setup, setup_audio)) // 起動時にsetupシステムを実行(System)
         .add_systems(
             Update,
             (
-                handle_mouse,       // マウス入力を処理するシステム
-                handle_keypress,    // キーボード入力を処理するシステム
-                spawn_points,       // ポイントを生成するシステム(エンティティをランダムに生成)
-                despawn_points,     // ポイントを削除するシステム
+                handle_mouse,            // マウス入力を処理するシステム
+                handle_keypress,         // キーボード入力を処理するシステム
+                spawn_points,            // ポイントを生成するシステム(エンティティをランダムに生成)
+                despawn_points,          // ポイントを削除するシステム
                 animate_spawning, // ポイントの生成アニメーションを処理するシステム(出現アニメーション)
                 animate_despawning, // ポイントの削除アニメーションを処理するシステム(消失アニメーション)
                 update_camera,      // カメラの更新を処理するシステム(カメラの位置や角度の変更)
                 update_lights, // ライトの更新を処理するシステム(シーン内の光源の位置や強度の変更)
+                adjust_volume_with_zoom, // ズームに応じてBGMの音量を調整するシステム
             ),
         )
         .run();
@@ -141,6 +147,10 @@ struct PointCounter(usize);
 /// 図形のリストを管理する
 #[derive(Resource)]
 struct SampledShapes(Vec<(Shape, Vec3)>); // Vec<(図形, 位置情報)>
+
+// BGMの再生を管理するためのリソース
+#[derive(Resource)]
+struct BgmHandle(Handle<AudioInstance>);
 
 impl SampledShapes {
     /// SampledShapesを新しく作成し、すべての図形を横並びにする
@@ -298,8 +308,8 @@ struct CameraRig {
     /// 正の値は上から下を見下ろす視点
     pub pitch: f32,
 
-    /// 注視点からの距離（ズームレベル）。値が小さいほど拡大される。
-    pub distance: f32,
+    pub current_distance: f32, // 現在のズームレベル
+    pub target_distance: f32,  // 目的のズームレベル（徐々にこれに近づける）
 
     /// カメラが注視している、または周囲を回転する対象点の位置（3D空間座標）
     /// これがカメラの中心点となる
@@ -382,10 +392,11 @@ fn setup(
         Transform::from_xyz(-2.0, 3.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y), // カメラの初期位置
         Bloom::NATURAL,      // Bloom(光の滲み)エフェクトを有効化
         CameraRig {
-            yaw: 0.56,          // 水平方向の角度
-            pitch: 0.45,        // 垂直方向の角度
-            distance: 8.0,      // ズーム距離
-            target: Vec3::ZERO, // 注視点
+            yaw: 0.56,             // 水平方向の角度
+            pitch: 0.45,           // 垂直方向の角度
+            current_distance: 8.0, // 現在のズーム距離
+            target_distance: 8.0,  // 目的のズーム距離
+            target: Vec3::ZERO,    // 注視点
         },
     ));
 
@@ -505,17 +516,17 @@ fn handle_keypress(
 
     // 「-」キー：カメラをズームアウト（距離を遠ざける）
     if keyboard.just_pressed(KeyCode::NumpadSubtract) || keyboard.just_pressed(KeyCode::Minus) {
-        camera_rig.distance += MAX_CAMERA_DISTANCE / 15.0;
-        camera_rig.distance = camera_rig
-            .distance
+        camera_rig.target_distance += MAX_CAMERA_DISTANCE / 15.0;
+        camera_rig.target_distance = camera_rig
+            .target_distance
             .clamp(MIN_CAMERA_DISTANCE, MAX_CAMERA_DISTANCE); // 距離の範囲制限
     }
 
     // 「+」キー：カメラをズームイン（距離を近づける）
     if keyboard.just_pressed(KeyCode::NumpadAdd) {
-        camera_rig.distance -= MAX_CAMERA_DISTANCE / 15.0;
-        camera_rig.distance = camera_rig
-            .distance
+        camera_rig.target_distance -= MAX_CAMERA_DISTANCE / 15.0;
+        camera_rig.target_distance = camera_rig
+            .target_distance
             .clamp(MIN_CAMERA_DISTANCE, MAX_CAMERA_DISTANCE); // 距離の範囲制限
     }
 
@@ -572,11 +583,11 @@ fn handle_mouse(
     if accumulated_mouse_scroll.delta != Vec2::ZERO {
         // ホイールの動きを使ってズーム距離を調整
         let mouse_scroll = accumulated_mouse_scroll.delta.y;
-        camera_rig.distance -= mouse_scroll / 15.0 * MAX_CAMERA_DISTANCE;
+        camera_rig.target_distance -= mouse_scroll / 15.0 * MAX_CAMERA_DISTANCE;
 
         // カメラの距離が指定範囲内に収まるよう調整
-        camera_rig.distance = camera_rig
-            .distance
+        camera_rig.target_distance = camera_rig
+            .target_distance
             .clamp(MIN_CAMERA_DISTANCE, MAX_CAMERA_DISTANCE);
     }
 
@@ -753,9 +764,17 @@ fn animate_despawning(
 }
 
 // カメラの位置や角度を更新するシステム
-fn update_camera(mut camera: Query<(&mut Transform, &CameraRig), Changed<CameraRig>>) {
+fn update_camera(mut camera: Query<(&mut Transform, &mut CameraRig)>, time: Res<Time>) {
+    // 前回のフレームからの経過時間を取得
+    let delta_time = time.delta_secs();
     // カメラ設定(CameraRig)が変更された場合にのみ更新
-    for (mut transform, rig) in camera.iter_mut() {
+    for (mut transform, mut rig) in camera.iter_mut() {
+        // current_distance を target_distance に徐々に近づける (線形補間)
+        rig.current_distance = rig
+            .current_distance
+            .lerp(rig.target_distance, delta_time * 5.0);
+        // ※ 5.0 は速度係数。この値を調整すると動きが変わります（値が大きいほど早く、小さいほどゆっくり動く）
+
         // 注視対象から見たカメラの方向を計算
         // Quat::from_rotation_x/y():
         // 特定軸の回転数を表す四元数を生成
@@ -763,7 +782,7 @@ fn update_camera(mut camera: Query<(&mut Transform, &CameraRig), Changed<CameraR
             Quat::from_rotation_y(-rig.yaw) * Quat::from_rotation_x(rig.pitch) * Vec3::Z; // Y軸とX軸の回転を適用
 
         // カメラの位置をターゲットから指定位置離れた位置に設定
-        transform.translation = rig.target - looking_direction * rig.distance;
+        transform.translation = rig.target - looking_direction * rig.current_distance;
 
         // カメラがターゲットを見るように設定
         transform.look_at(rig.target, Vec3::Y);
@@ -784,5 +803,36 @@ fn update_lights(
         // 現在の明るさから徐々に目標の明るさに近づける
         // lerpは線形補間を行う関数
         light.intensity = light.intensity.lerp(intensity, 0.04);
+    }
+}
+
+/// 起動時に BGM をロード＆再生してリソースに保存
+fn setup_audio(asset_server: Res<AssetServer>, audio: Res<Audio>, mut commands: Commands) {
+    // assets/sounds/Sample.mp3 をロードして再生
+    let bgm: Handle<KiraAudioSource> = asset_server.load("sounds/Sample.mp3");
+
+    // kira_audioのplay()は AudioInstanceを返す
+    let instance: Handle<AudioInstance> = audio.play(bgm).looped().handle();
+    commands.insert_resource(BgmHandle(instance));
+}
+
+/// カメラズーム（distance）に合わせて音量を調整するシステム
+fn adjust_volume_with_zoom(
+    mut audio_instances: ResMut<Assets<AudioInstance>>, // 音声インスタンスを管理するリソース
+    bgm: Res<BgmHandle>,
+    camera_query: Query<&CameraRig>,
+) {
+    let rig = camera_query.single();
+
+    // distance が MIN_CAMERA_DISTANCE..MAX_CAMERA_DISTANCE の範囲
+    // distance = MIN → volume = 1.0
+    // distance = MAX → volume = 0.0
+    let norm = ((MAX_CAMERA_DISTANCE - rig.unwrap().current_distance)
+        / (MAX_CAMERA_DISTANCE - MIN_CAMERA_DISTANCE))
+        .clamp(0.0, 1.0);
+
+    // audio.instance(&bgm.0) を使ってインスタンスを取得
+    if let Some(instance) = audio_instances.get_mut(&bgm.0) {
+        instance.set_volume(norm as f64, AudioTween::linear(Duration::from_millis(300)));
     }
 }
