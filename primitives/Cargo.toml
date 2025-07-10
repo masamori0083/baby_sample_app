@@ -1,0 +1,28 @@
+[package]
+name = "primitives"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = { version = "0.16.1", default-features = false, features = [
+    "dynamic_linking",
+    "animation",
+    "bevy_asset",
+    "bevy_core_pipeline",
+    "bevy_render",
+    "bevy_pbr",
+    "bevy_scene",
+    "bevy_sprite",
+    "bevy_text",
+    "bevy_ui",
+    "bevy_window",
+    "bevy_winit",
+    "default_font",
+    "png",
+    "hdr",
+		"tonemapping_luts"
+]}
+bevy_kira_audio = { version = "0.23.0", features = ["mp3"] }
+once_cell = "1.21.3"
+rand = "0.8"
+rand_chacha = "0.3"

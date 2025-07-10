@@ -1,8 +1,7 @@
 use bevy:: {
-	color::pallets::css::RED,
 	core_pipeline::{bloom::Bloom, tonemapping::Tonemapping, Skybox},
 	math::Vec3,
-	pdr::{FogVolume, VolumetricFog, VolumetricLight},
+	pbr::{FogVolume, VolumetricFog, VolumetricLight},
 	prelude::*,
 };
 
@@ -12,19 +11,19 @@ const DIRECTIONAL_LIGHT_MOVEMENT_SPEED: f32 = 0.02;
 /// ユーザーが選んだ設定
 #[derive(Resource)]
 struct AppSettings {
-	// ボリューメトリックフォグが有効かどうか
-	volumetric_fog_enabled: bool,
-	// ボリューメトリックライトが有効かどうか
-	volumetric_light_enabled: bool,
+	// ボリューメトリックスポットライトが有効かどうか
+	volumetric_spotlight: bool,
+	// ボリューメトリックポイントライトが有効かどうか
+	volumetric_pointlight: bool,
 }
 
 /// 構造体の初期化
 impl Default for AppSettings {
 	fn default() -> Self {
-		// デフォルトではボリューメトリックフォグとライトが有効
+		// デフォルトではボリューメトリックスポットライトとポイントライトが有効
 		Self {
-			volumetric_fog_enabled: true,
-			volumetric_light_enabled: true,
+			volumetric_spotlight: true,
+			volumetric_pointlight: true,
 		}
 	}
 }
@@ -50,7 +49,11 @@ fn main() {
 			blue: 0.02,
 			alpha: 1.0,
 		})))
-		.insert_resource(AmbientLight::None) // 環境光を無効化
+		.insert_resource(AmbientLight {
+    color: Color::BLACK,
+    brightness: 0.0,
+		affects_lightmapped_meshes: false,
+	}) // 環境光を無効化
 		.init_resource::<AppSettings>()
 		.add_systems(Startup, setup)
 		.add_systems(Update, tweak_scene) // Updateは毎フレーム呼ばれる
@@ -70,8 +73,8 @@ fn setup(
 ) {
 	// glTF形式の3Dモデルを読み込む
 	commands.spawn(
-		SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/VolumetricFogExample/VolumetricFogExample.glb"),
-	)));
+		SceneRoot(asset_server.load("models/VolumetricFogExample/VolumetricFogExample.glb#Scene0")),
+	);
 
 	// カメラを追加
 	commands
@@ -102,9 +105,9 @@ fn setup(
 		PointLight {
 			shadows_enabled: true, // シャドウを有効化
 			range: 150.0, // 光の範囲
-			color: RED.into(), // 光の色を赤に設定
+			color: Color::srgb(1.0, 0.0, 0.0), // 光の色を赤に設定
 			intensity: 1000.0, // 光の強度
-			...default()
+			..default()
 		},
 		VolumetricLight, // 光が当たった物体だけ明るくなる効果
 		MoveBackAndForthHorizontally { // 左右に自動で動く設定
@@ -119,8 +122,7 @@ fn setup(
 		Transform::from_xyz(-1.8, 3.9, -2.7).looking_at(Vec3::ZERO, Vec3::Y), // 座標から原点を向く
 		SpotLight {
 			intensity: 5000.0, //ルーメンス
-			color: Color::White, // 光の色を白に設定
-			intensity: 1000.0, // 光の強度
+			color: Color::WHITE, // 光の色を白に設定
 			inner_angle: 0.76, // 内側の角度
 			outer_angle: 0.94, // 外側の角度
 			shadows_enabled: true, // シャドウを有効化
@@ -171,7 +173,7 @@ fn create_text(app_settings: &AppSettings) -> Text {
 /// シーン内で変更があったDirectionLightに対して影の有効化と光源効果を付与
 fn tweak_scene(
 	mut commands: Commands,
-	mut lights: Query<Entity, &mut DirectionalLight, Changed<DirectionalLight>>, // シーン内で変更されたDirectionalLightを取得
+	mut lights: Query<(Entity, &mut DirectionalLight), Changed<DirectionalLight>>, // シーン内で変更されたDirectionalLightを取得
 ) {
 	// 直前のフレームでなんらかの変更があった全てのDirectionalLightに対して...
 	for (light, mut directional_light) in lights.iter_mut() {
@@ -227,7 +229,7 @@ fn move_point_light(
 		let mut need_toggle = false;
 
 		// 移動量の計算
-		translation.x += move_data.speed * timer.delta_secs()
+		translation.x += move_data.speed * timer.delta_secs();
 
 		// 範囲を超えた場合の処理
 		if translation.x > move_data.max_x {
