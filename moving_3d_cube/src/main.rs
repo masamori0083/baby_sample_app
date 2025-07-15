@@ -16,6 +16,7 @@
 //! - より詳細な地形生成や探索可能なオブジェクトの導入
 
 use bevy::prelude::*;
+use bevy_kira_audio::{Audio, AudioControl, AudioPlugin};
 use std::collections::HashSet;
 
 #[derive(Component)] // キューブを識別するためのマーカーコンポーネント
@@ -85,6 +86,7 @@ struct CameraController {
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
+        .add_plugins(AudioPlugin) // 音楽再生のためのプラグインを追加
         .insert_resource(Daytime::Day) // 初期状態は昼
         .insert_resource(DayNightSettings {
             day: EnvironmentSettings {
@@ -106,7 +108,13 @@ fn main() {
             chunk_size: 20.0,   // チャンクのサイズ
             render_distance: 2, // レンダリング距離（2x2のグリッド）
         })
-        .add_systems(Startup, setup)
+        .add_systems(
+            Startup,
+            (
+                setup,
+                setup_audio, // 音楽のセットアップ
+            ),
+        )
         .add_systems(
             Update,
             (
@@ -183,6 +191,17 @@ fn setup(
         InheritedVisibility::default(),
         ViewVisibility::default(),
     ));
+}
+
+/// 音楽を再生するシステム
+fn setup_audio(asset_server: Res<AssetServer>, audio: Res<Audio>) {
+    // BGM をロードして再生
+    let music = asset_server.load("audio/field_sound.mp3");
+
+    audio
+        .play(music)
+        .looped() // ループ再生
+        .with_volume(0.03); // ボリューム 3%
 }
 
 /// カメラ追従システム
@@ -445,6 +464,22 @@ fn manage_infinite_world(
                         world_settings.chunk_size,
                     );
                 }
+            }
+        }
+    }
+}
+
+/// 音楽の音量制御システム
+fn music_control(keyboard_input: Res<ButtonInput<KeyCode>>, audio_query: Query<&mut AudioSink>) {
+    if keyboard_input.just_pressed(KeyCode::KeyM) {
+        // Mキーが押された場合、音楽の音量をトグル
+        for sink in &audio_query {
+            if sink.is_paused() {
+                sink.play(); // 音楽を一時停止
+                println!("音楽を一時停止しました。");
+            } else {
+                sink.play(); // 音楽を再生
+                println!("音楽を再生しました。");
             }
         }
     }
