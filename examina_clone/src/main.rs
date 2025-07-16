@@ -3,6 +3,18 @@ use bevy::render::mesh::primitives::Capsule3dMeshBuilder;
 use bevy_kira_audio::{Audio, AudioControl, AudioPlugin};
 use bevy_rapier3d::prelude::*;
 
+/// ゲームオーバーなどの状態を管理するリソース
+#[derive(Resource, Debug, Clone, Eq, PartialEq, Hash, Default)]
+enum GameState {
+    #[default]
+    Playing, // ゲームプレイ中
+    GameOver, // ゲームオーバー状態
+}
+
+/// ゲームオーバーのUIを表示するシステム
+#[derive(Component)]
+struct GameOverUI;
+
 /// プレイヤーキャラクターのコンポーネント
 #[derive(Component)]
 struct Player;
@@ -10,8 +22,13 @@ struct Player;
 /// 敵キャラクターのコンポーネント
 #[derive(Component)]
 struct Enemy {
-    vision_range: f32, // 敵の視界範囲
-    vision_angle: f32, // 敵の視界角度
+    vision_range: f32,           // 敵の視界範囲
+    vision_angle: f32,           // 敵の視界角度
+    patrol_points: Vec<Vec3>,    // パトロールポイント
+    current_patrol_index: usize, // 現在のパトロールポイントのインデックス
+    speed: f32,                  // 敵の移動速度
+    initial_position: Vec3,      // 敵の初期位置
+    initial_rotation: Quat,      // 敵の初期向き
 }
 
 /// カメラのオフセットを管理するコンポーネント
@@ -45,14 +62,17 @@ fn main() {
             RapierPhysicsPlugin::<NoUserData>::default(),
             RapierDebugRenderPlugin::default(),
         ))
+        .init_resource::<GameState>() // ゲーム状態の初期化
         .add_systems(Startup, setup_scene)
         .add_systems(
             Update,
             (
                 player_input,
                 enemy_vision_system,
+                enemy_patrol_system,
                 camera_follow_player.after(player_input),
                 camera_zoom,
+                restart_game,
             ),
         )
         .run();
@@ -110,30 +130,63 @@ fn setup_scene(
         })),
     ));
 
-    // 敵キャラクター(視界を持つ静的リジットボディ)
-    commands.spawn((
-        Enemy {
-            vision_range: 10.0,
-            vision_angle: 45.0,
-        },
-        RigidBody::Fixed, // 静的リジットボディ
-        Collider::capsule_y(0.9, 0.4),
-        Transform::from_xyz(5.0, 1.0, 5.0), // 初期位置
-        Mesh3d(
-            meshes.add(
-                Capsule3dMeshBuilder::new(
-                    /* radius */ 0.4, /* height between hemisphere centers */ 1.8,
-                    /* longitudes */ 16, /* latitudes */ 8,
-                )
-                .build(),
+    // 敵キャラクター(視界を持つ動的リジットボディ)
+    // 敵キャラクターの初期位置を設定
+    let enemy_initial_position = Vec3::new(5.0, 1.0, 5.0); // 初期位置を設定
+    let initial_target = Vec3::new(-5.0, 1.0, 5.0); // 初期ターゲット位置
+    let enemyinitial_rotation = Quat::from_rotation_y(
+				(initial_target - enemy_initial_position).angle_between(Vec3::Z),
+		); // 初期向きを計算
+    let enemy_entity = commands
+        .spawn((
+            Enemy {
+                vision_range: 10.0,
+                vision_angle: 45.0,
+                patrol_points: vec![
+                    Vec3::new(5.0, 1.0, 5.0),   // 1. 右前
+                    Vec3::new(-5.0, 1.0, 5.0),  // 2. 左前
+                    Vec3::new(-5.0, 1.0, -5.0), // 3. 左後
+                    Vec3::new(5.0, 1.0, -5.0),  // 4. 右後
+                ],
+                current_patrol_index: 0,
+                speed: 4.0,                               // 敵の移動速度
+                initial_position: enemy_initial_position, // 敵の初期位置
+                initial_rotation: enemyinitial_rotation,  // 敵の初期向き
+            },
+            RigidBody::KinematicPositionBased, // 動的リジットボディ
+            Collider::capsule_y(0.9, 0.4),
+            Transform {
+                translation: enemy_initial_position,
+                rotation: enemyinitial_rotation, // 初期向き
+                ..default()
+            },
+            Mesh3d(
+                meshes.add(
+                    Capsule3dMeshBuilder::new(
+                        /* radius */ 0.4, /* height between hemisphere centers */ 1.8,
+                        /* longitudes */ 16, /* latitudes */ 8,
+                    )
+                    .build(),
+                ),
             ),
-        ),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.8, 0.2, 0.2), // 赤色の敵
-            ..default()
-        })),
-    ));
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::srgb(0.8, 0.2, 0.2), // 赤色の敵
+                ..default()
+            })),
+        ))
+        .id();
 
+    // 敵の前面に「目」のようなマーカーを追加(子エンティティとして);
+    commands.entity(enemy_entity).with_children(|parent| {
+        parent.spawn((
+            Mesh3d(meshes.add(Sphere::new(0.15))), // 小さな球を目として使用
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::srgb(0.2, 0.2, 0.8), // 青色の目
+                ..default()
+            })),
+            Transform::from_xyz(0.0, 0.5, -0.4), // 敵の前面に配置
+        ));
+    });
     // カメラの設定
     commands.spawn((
         Camera3d::default(),
@@ -159,7 +212,13 @@ fn player_input(
     mut query: Query<&mut KinematicCharacterController, With<Player>>,
     camera_query: Query<&Transform, (With<Camera3d>, Without<Player>)>,
     time: Res<Time>,
+    game_state: Res<GameState>,
 ) {
+    // ゲーム状態がGameOverの場合は何もしない
+    if *game_state == GameState::GameOver {
+        return; // ゲームオーバー状態ではプレイヤー入力を無視
+    }
+
     // 動きを制御するための変数
     let Ok(camera_transform) = camera_query.single() else {
         return; // カメラが存在しない場合は何もしない
@@ -219,10 +278,17 @@ fn player_input(
 fn enemy_vision_system(
     player_query: Query<&Transform, With<Player>>,
     enemy_query: Query<(&Transform, &Enemy)>,
+    mut game_state: ResMut<GameState>,
+    mut commands: Commands,
 ) {
     let Ok(player_transform) = player_query.single() else {
         return; // プレイヤーが存在しない場合は何もしない
     };
+
+    // ゲーム状態がGameOverの場合は何もしない
+    if *game_state == GameState::GameOver {
+        return;
+    }
 
     // 敵キャラクターの情報を取得
     for (enemy_transform, enemy) in enemy_query.iter() {
@@ -252,6 +318,51 @@ fn enemy_vision_system(
                 distance_to_player, angle_to_player
             );
             // ここに敵がプレイヤーを検知した際の処理を追加できる
+            *game_state = GameState::GameOver; // ゲームオーバー状態に変更
+            spawn_game_over_ui(&mut commands); // ゲームオーバーのUIを表示
+
+            // 一度検知したらループを抜ける
+            break;
+        }
+    }
+}
+
+/// 敵キャラクターのパトロールシステム
+fn enemy_patrol_system(
+    mut enemy_query: Query<(&mut Transform, &mut Enemy)>,
+    time: Res<Time>,
+    game_state: Res<GameState>,
+) {
+    // ゲーム状態がGameOverの場合は何もしない
+    if *game_state == GameState::GameOver {
+        return; // ゲームオーバー状態ではパトロールしない
+    }
+
+    // 敵キャラクターの情報を取得
+    for (mut transform, mut enemy) in enemy_query.iter_mut() {
+        // パトロールポイントが空の場合は何もしない
+        if enemy.patrol_points.is_empty() {
+            continue;
+        }
+
+        // 現在のパトロールポイントを取得
+        let target_point = enemy.patrol_points[enemy.current_patrol_index];
+
+        // 目標位置までのベクトルを計算
+        let direction = (target_point - transform.translation).normalize();
+        // 目標位置までの距離を計算
+        let distance_to_target = transform.translation.distance(target_point);
+
+        // 目標位置に近づいたら次のパトロールポイントへ移動
+        if distance_to_target < 0.2 {
+            enemy.current_patrol_index =
+                (enemy.current_patrol_index + 1) % enemy.patrol_points.len();
+        } else {
+            // 目標位置に向かって移動
+            transform.translation += direction * enemy.speed * time.delta_secs();
+            // 敵の向きを目標位置に向ける
+            transform.look_at(target_point, Vec3::Y);
+            println!("🟢 Enemy patrolling to point: {:?}", target_point);
         }
     }
 }
@@ -311,5 +422,70 @@ fn camera_zoom(
             camera_controller.max_distance,
         );
         println!("Zooming out: {}", camera_controller.distance);
+    }
+}
+
+/// ゲームオーバー表示システム
+fn spawn_game_over_ui(commands: &mut Commands) {
+    // ゲームオーバーのUIを表示するためのコードをここに追加
+    // 例えば、テキストやボタンを表示するなど
+    commands.spawn((
+        Text::new("Game Over! Press R to Restart"),
+        TextFont {
+            font_size: 50.0,
+            ..default()
+        },
+        TextColor(Color::srgb(1.0, 0.0, 0.0)), // 赤色のテキスト
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Percent(30.0),
+            top: Val::Percent(40.0),
+            ..default()
+        },
+        GameOverUI, // GameOverUIコンポーネントを追加
+    ));
+    println!("Game Over! Press R to Restart");
+}
+
+/// ゲーム再スタートシステム
+fn restart_game(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut commands: Commands,
+    mut game_state: ResMut<GameState>,
+    game_over_query: Query<Entity, With<GameOverUI>>,
+    mut player_query: Query<&mut Transform, (With<Player>, Without<Enemy>)>,
+    mut enemy_query: Query<(&mut Transform, &mut Enemy), Without<Player>>,
+) {
+    // ゲームオーバー状態でない場合は何もしない
+    if *game_state != GameState::GameOver {
+        return;
+    }
+    // Rキーが押された場合の処理
+    if keys.just_pressed(KeyCode::KeyR) {
+        for entity in game_over_query.iter() {
+            commands.entity(entity).despawn(); // ゲームオーバーUIを削除
+        }
+
+        // ゲーム状態をPlayingに戻す
+        if let Ok(mut player_transform) = player_query.single_mut() {
+            // プレイヤーの位置を初期位置にリセット
+            player_transform.translation = Vec3::new(0.0, 1.0, 8.0);
+        }
+
+        // 敵キャラクターの位置を初期位置にリセット
+        for (mut enemy_transform, mut enemy) in enemy_query.iter_mut() {
+            enemy_transform.translation = enemy.initial_position; // 敵の初期位置に戻す
+            enemy.current_patrol_index = 0; // パトロールポイントのインデックスをリセット
+
+            // 敵の向きを初期位置に向ける
+            if !enemy.patrol_points.is_empty() {
+                enemy_transform.rotation = enemy.initial_rotation; // 敵の初期向きに戻す
+            } else {
+                // パトロールポイントがない場合は外側を向ける
+                enemy_transform.rotation = Quat::from_rotation_y(std::f32::consts::PI);
+            }
+        }
+        *game_state = GameState::Playing; // ゲーム状態をPlayingに戻す
+        println!("Game restarted!");
     }
 }
