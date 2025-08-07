@@ -118,43 +118,32 @@ fn setup(
 /// プレイヤーの動きとカメラの追従を制御
 fn player_movement(
     keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut query: Query<(&mut LinearVelocity, &Transform), With<Player>>,
-    camera_query: Query<&Transform, (With<MainCamera>, Without<Player>)>,
+    mut query: Query<(&mut LinearVelocity, &mut Transform), With<Player>>,
+		time: Res<Time>,
 ) {
-    let Ok(camera_transform) = camera_query.single() else {
-        return;
-    };
-    let Ok((mut linear_velocity, transform)) = query.single_mut() else {
+    let Ok((mut linear_velocity, mut player_transform)) = query.single_mut() else {
         return;
     };
 
-    let speed = 5.0;
-    let mut direction = Vec3::ZERO;
+    let move_speed = 5.0;
+    let rotate_speed = 2.0;
 
-    if keyboard_input.pressed(KeyCode::KeyW) {
-        direction += *camera_transform.forward();
-    }
-    if keyboard_input.pressed(KeyCode::KeyS) {
-        direction += *camera_transform.back();
-    }
+    // 移動（前進W・後退S）
+    let mut move_direction = 0.0;
+    if keyboard_input.pressed(KeyCode::KeyW) { move_direction += 1.0; }
+    if keyboard_input.pressed(KeyCode::KeyS) { move_direction -= 1.0; }
+
+    let forward = player_transform.forward();
+    linear_velocity.0 = forward * move_speed * move_direction;
+
+    // 左右回転（A/D）
     if keyboard_input.pressed(KeyCode::KeyA) {
-        direction += *camera_transform.left();
+        player_transform.rotate_y(rotate_speed * time.delta_secs());
     }
     if keyboard_input.pressed(KeyCode::KeyD) {
-        direction += *camera_transform.right();
+        player_transform.rotate_y(-rotate_speed * time.delta_secs());
     }
-
-    if direction.length_squared() > 0.0 {
-        direction = direction.normalize() * speed;
-
-        linear_velocity.0.x = direction.x;
-        linear_velocity.0.z = direction.z;
-    } else {
-        // 入力がなければ速度をゼロにする
-        linear_velocity.0.x = 0.0;
-        linear_velocity.0.z = 0.0;
-    }
-    println!("プレイヤーの位置: {:?}", transform.translation);
+    println!("プレイヤーの位置: {:?}", player_transform.translation);
 }
 
 fn camera_follow_player(
@@ -169,27 +158,19 @@ fn camera_follow_player(
         return;
     };
 
-    // プレイヤーの背後、少し上にカメラを配置
-    let desired_position = player_transform.translation + Vec3::new(0.0, 0.5, 2.0); // プレイヤーの背後0.5m、上に2m
+    let behind_distance = 1.2;  // キャラクター背後の距離
+    let height_offset = 1.5;    // カメラ高さ
 
-    // カメラの位置を滑らかにプレイヤーに追従
-    let lerp_factor = 8.0 * time.delta_secs();
-    camera_transform.translation = camera_transform
-        .translation
-        .lerp(desired_position, lerp_factor);
+    // プレイヤーの背後にカメラを配置（完全にプレイヤー向きを基準）
+    let desired_position = player_transform.translation
+        - player_transform.forward() * behind_distance
+        + Vec3::Y * height_offset;
 
-    // カメラの回転をプレイヤーの向きに合わせる
-    // プレイヤーの進行方向を取得(速度の向き)
-    let horizontal_velocity = Vec3::new(player_velocity.0.x, 0.0, player_velocity.0.z);
-    if horizontal_velocity.length_squared() > 0.0 {
-        // プレイヤーの進行方向にカメラを向ける
-        let look_target = player_transform.translation + horizontal_velocity.normalize();
-        camera_transform.look_at(look_target + Vec3::Y * 1.0, Vec3::Y);
-    } 
-    println!(
-        "カメラ位置: {:?}, プレイヤー位置: {:?}",
-        camera_transform.translation, player_transform.translation
-    );
+    let lerp_factor = 10.0 * time.delta_secs();
+    camera_transform.translation = camera_transform.translation.lerp(desired_position, lerp_factor);
+
+    // 常にプレイヤーを向く
+    camera_transform.look_at(player_transform.translation + Vec3::Y * 1.0, Vec3::Y);
 }
 
 fn spawn_player_at_spawn_point(
@@ -211,16 +192,18 @@ fn spawn_player_at_spawn_point(
         commands.spawn((
             Player,
             RigidBody::Dynamic,
-            Collider::capsule(0.5, 1.0), // プレイヤーのサイズ
+            Collider::cuboid(0.5, 0.5, 0.5), // プレイヤーのサイズ
             LockedAxes::ROTATION_LOCKED, // 回転をロック
             LinearVelocity(Vec3::ZERO),  // 初期速度はゼロ
             TransformInterpolation,      // Avianでなめらかに補完
+						Friction::new(0.0), // 摩擦をデフォルトに設定
+						Restitution::new(0.0), // 反発係数をデフォルトに設定
             Transform {
-                translation: transform.translation + Vec3::Y * 1.0, // 少し上に配置
+                translation: transform.translation + Vec3::Y * 0.5, // 少し上に配置
                 rotation: Quat::from_rotation_y(spawn.angle.to_radians()),
                 ..default()
             },
-            Mesh3d(meshes.add(Capsule3d::new(0.5, 1.0))),
+            Mesh3d(meshes.add(Cuboid::new(0.5, 0.5, 0.5))),
             MeshMaterial3d(materials.add(StandardMaterial {
                 base_color: Color::srgb(0.3, 0.6, 1.0), // 明るい青色のプレイヤー
                 ..default()
